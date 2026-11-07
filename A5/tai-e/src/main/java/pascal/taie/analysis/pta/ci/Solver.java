@@ -44,6 +44,7 @@ import pascal.taie.ir.stmt.StoreArray;
 import pascal.taie.ir.stmt.StoreField;
 import pascal.taie.language.classes.ClassHierarchy;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.language.type.ReferenceType;
 import pascal.taie.util.AnalysisException;
 import pascal.taie.language.type.Type;
 
@@ -97,6 +98,9 @@ class Solver {
      */
     private void addReachable(JMethod method) {
         // TODO - finish me
+        if (callGraph.addReachableMethod(method) && !method.isAbstract()) {
+            method.getIR().forEach(stmt -> stmt.accept(stmtProcessor));
+        }
     }
 
     /**
@@ -105,6 +109,27 @@ class Solver {
     private class StmtProcessor implements StmtVisitor<Void> {
         // TODO - if you choose to implement addReachable()
         //  via visitor pattern, then finish me
+
+        @Override
+        public Void visit(New stmt) {
+            VarPtr target = pointerFlowGraph.getVarPtr(stmt.getLValue());
+            Obj obj = heapModel.getObj(stmt);
+            workList.addEntry(target, new PointsToSet(obj));
+            return null;
+        }
+
+
+        @Override
+        public Void visit(Copy stmt) {
+            if (stmt.getLValue().getType() instanceof ReferenceType) {
+                VarPtr source = pointerFlowGraph.getVarPtr(stmt.getRValue());
+                VarPtr target = pointerFlowGraph.getVarPtr(stmt.getLValue());
+                addPFGEdge(source, target);
+            }
+            return null;
+        }
+
+
     }
 
     /**
@@ -112,6 +137,11 @@ class Solver {
      */
     private void addPFGEdge(Pointer source, Pointer target) {
         // TODO - finish me
+
+        if (pointerFlowGraph.addEdge(source, target) && !source.getPointsToSet().isEmpty()) {
+            workList.addEntry(target, source.getPointsToSet());
+        }
+
     }
 
     /**
