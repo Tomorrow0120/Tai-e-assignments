@@ -57,18 +57,27 @@ public class ConstantPropagation extends
     @Override
     public CPFact newBoundaryFact(CFG<Stmt> cfg) {
         // TODO - finish me
-        return null;
+        CPFact boundary = new CPFact();
+        for (Var param : cfg.getIR().getParams()) {
+            if (canHoldInt(param)) {
+                boundary.update(param, Value.getNAC());
+            }
+        }
+        return boundary;
     }
 
     @Override
     public CPFact newInitialFact() {
         // TODO - finish me
-        return null;
+        return new CPFact();
     }
 
     @Override
     public void meetInto(CPFact fact, CPFact target) {
         // TODO - finish me
+        for(Var var:fact.keySet()){
+            target.update(var,meetValue(fact.get(var),target.get(var)));
+        }
     }
 
     /**
@@ -76,13 +85,29 @@ public class ConstantPropagation extends
      */
     public Value meetValue(Value v1, Value v2) {
         // TODO - finish me
-        return null;
+        if(v1.isUndef()) return v2;
+        if(v2.isUndef()) return v1;
+        if(v1.equals(v2)) return v1;
+        return Value.getNAC();
     }
 
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        return false;
+        CPFact old=out.copy();
+        out.clear();
+        out.copyFrom(in);
+        if(stmt instanceof DefinitionStmt<?,?>){
+            DefinitionStmt<?,?> definition=(DefinitionStmt<?, ?>) stmt;
+            if(definition.getLValue() instanceof Var){
+                Var var=(Var) definition.getLValue();
+
+                if(canHoldInt(var)){
+                    out.update(var,evaluate(definition.getRValue(),in));
+                }
+            }
+        }
+        return !old.equals(out);
     }
 
     /**
@@ -112,6 +137,93 @@ public class ConstantPropagation extends
      */
     public static Value evaluate(Exp exp, CPFact in) {
         // TODO - finish me
-        return null;
+        if(exp instanceof IntLiteral){
+            IntLiteral literal=(IntLiteral) exp;
+            return Value.makeConstant(literal.getValue());
+        }
+
+        if(exp instanceof Var){
+            Var var=(Var) exp;
+            return in.get(var);
+        }
+
+        // 情况 3：二元运算，比如 a + b
+        if (exp instanceof BinaryExp binary) {
+            Value v1 = evaluate(binary.getOperand1(), in);
+            Value v2 = evaluate(binary.getOperand2(), in);
+
+            // 有一个是 NAC，结果就是 NAC；
+            // 特殊处理：NAC / 0 和 NAC % 0 在运行时必然抛异常，
+            // 变量不会被赋值，因此结果应为 UNDEF 而非 NAC
+            if (v1.isNAC() || v2.isNAC()) {
+                if (v1.isNAC() && v2.isConstant()
+                        && binary instanceof ArithmeticExp arith0
+                        && (arith0.getOperator() == ArithmeticExp.Op.DIV
+                        || arith0.getOperator() == ArithmeticExp.Op.REM)
+                        && v2.getConstant() == 0) {
+                    return Value.getUndef();
+                }
+                return Value.getNAC();
+            }
+
+            // 有一个是 UNDEF，结果就是 UNDEF
+            if (v1.isUndef() || v2.isUndef()) {
+                return Value.getUndef();
+            }
+
+            // 两个都是常量，做运算
+            int a = v1.getConstant();
+            int b = v2.getConstant();
+
+            if (binary instanceof ArithmeticExp arith) {
+                // 除数为 0 时除法/取余会抛异常，变量不会被赋值，结果为 UNDEF
+                if ((arith.getOperator() == ArithmeticExp.Op.DIV
+                        || arith.getOperator() == ArithmeticExp.Op.REM)
+                        && b == 0) {
+                    return Value.getUndef();
+                }
+                return switch (arith.getOperator()) {
+                    case ADD -> Value.makeConstant(a + b);
+                    case SUB -> Value.makeConstant(a - b);
+                    case MUL -> Value.makeConstant(a * b);
+                    case DIV -> Value.makeConstant(a / b);
+                    case REM -> Value.makeConstant(a % b);
+                };
+            }
+
+            // 条件表达式（==, !=, <, >, <=, >=）：常量为真返回 1，为假返回 0
+            if (binary instanceof ConditionExp cond) {
+                boolean result = switch (cond.getOperator()) {
+                    case EQ -> a == b;
+                    case NE -> a != b;
+                    case LT -> a < b;
+                    case GT -> a > b;
+                    case LE -> a <= b;
+                    case GE -> a >= b;
+                };
+                return Value.makeConstant(result ? 1 : 0);
+            }
+
+            if (binary instanceof ShiftExp shift) {
+                return switch (shift.getOperator()) {
+                    case SHL -> Value.makeConstant(a << b);
+                    case SHR -> Value.makeConstant(a >> b);
+                    case USHR -> Value.makeConstant(a >>> b);
+                };
+            }
+
+            if (binary instanceof BitwiseExp bitwise) {
+                return switch (bitwise.getOperator()) {
+                    case OR -> Value.makeConstant(a | b);
+                    case AND -> Value.makeConstant(a & b);
+                    case XOR -> Value.makeConstant(a ^ b);
+                };
+            }
+
+            // 其他二元运算类型，统一返回 NAC
+            return Value.getNAC();
+        }
+
+        return Value.getNAC();
     }
 }

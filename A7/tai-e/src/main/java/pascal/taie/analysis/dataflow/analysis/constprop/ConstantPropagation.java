@@ -82,7 +82,26 @@ public class ConstantPropagation extends
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        return false;
+        // 1. 先把旧的 out 存一份，最后比较有没有变
+        CPFact oldOut = out.copy();
+
+        // 2. out 初始化为 in 的副本（默认所有变量都不变）
+        out.copyFrom(in);
+
+        // 3. 如果是赋值语句
+        if (stmt instanceof DefinitionStmt<?, ?> defStmt) {
+            var lhs = defStmt.getLValue();
+            var rhs = defStmt.getRValue();
+
+            // 左边是变量才处理（字段访问不管）
+            if (lhs instanceof Var x) {
+                Value v = evaluate(rhs, in);
+                out.update(x, v);
+            }
+        }
+
+        // 4. 返回 out 有没有变化
+        return !out.equals(oldOut);
     }
 
     /**

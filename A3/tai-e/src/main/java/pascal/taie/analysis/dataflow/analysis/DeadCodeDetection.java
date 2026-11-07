@@ -45,9 +45,7 @@ import pascal.taie.ir.stmt.If;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.SwitchStmt;
 
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class DeadCodeDetection extends MethodAnalysis {
 
@@ -62,15 +60,94 @@ public class DeadCodeDetection extends MethodAnalysis {
         // obtain CFG
         CFG<Stmt> cfg = ir.getResult(CFGBuilder.ID);
         // obtain result of constant propagation
-        DataflowResult<Stmt, CPFact> constants =
-                ir.getResult(ConstantPropagation.ID);
+        DataflowResult<Stmt, CPFact> constants = ir.getResult(ConstantPropagation.ID);
         // obtain result of live variable analysis
-        DataflowResult<Stmt, SetFact<Var>> liveVars =
-                ir.getResult(LiveVariableAnalysis.ID);
+        DataflowResult<Stmt, SetFact<Var>> liveVars = ir.getResult(LiveVariableAnalysis.ID);
         // keep statements (dead code) sorted in the resulting set
         Set<Stmt> deadCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
         // TODO - finish me
         // Your task is to recognize dead code in ir and add it to deadCode
+
+        // ---- 1. 可达性分析：结合常量传播裁剪 if / switch 分支 ----
+        Set<Stmt> reachable = new HashSet<>();
+        Deque<Stmt> worklist = new ArrayDeque<>();
+        worklist.add(cfg.getEntry());
+
+        while (!worklist.isEmpty()) {
+            Stmt stmt = worklist.removeFirst();
+            // 已访问则跳过
+            if (!reachable.add(stmt)) {
+                continue;
+            }
+
+            // 求出该分支语句的常量值（若有）
+            Value value = null;
+            if (stmt instanceof If) {
+                If ifStmt = (If) stmt;
+                value = ConstantPropagation.evaluate(
+                        ifStmt.getCondition(), constants.getInFact(stmt));
+            } else if (stmt instanceof SwitchStmt) {
+                SwitchStmt switchStmt = (SwitchStmt) stmt;
+                value = constants.getInFact(stmt).get(switchStmt.getVar());
+            }
+
+            // 遍历出边，决定走哪些
+            for (Edge<Stmt> edge : cfg.getOutEdgesOf(stmt)) {
+                boolean follow = true;
+
+                if (stmt instanceof If && value != null && value.isConstant()) {
+                    // 条件为真走 IF_TRUE，为假走 IF_FALSE
+                    if (value.getConstant() != 0) {
+                        follow = edge.getKind() == Edge.Kind.IF_TRUE;
+                    } else {
+                        follow = edge.getKind() == Edge.Kind.IF_FALSE;
+                    }
+                }
+
+                if (stmt instanceof SwitchStmt && value != null && value.isConstant()) {
+                    SwitchStmt switchStmt = (SwitchStmt) stmt;
+                    int constant = value.getConstant();
+                    if (switchStmt.getCaseValues().contains(constant)) {
+                        // 命中某个 case：只走对应的 SWITCH_CASE 边
+                        follow = edge.isSwitchCase() && edge.getCaseValue() == constant;
+                    } else {
+                        // 未命中任何 case：只走 SWITCH_DEFAULT 边
+                        follow = edge.getKind() == Edge.Kind.SWITCH_DEFAULT;
+                    }
+                }
+
+                if (follow) {
+                    worklist.addLast(edge.getTarget());
+                }
+            }
+        }
+
+        // ---- 2. 不可达语句即为死代码（排除 entry / exit）----
+        for (Stmt stmt : cfg) {
+            if (!reachable.contains(stmt) && !cfg.isEntry(stmt) && !cfg.isExit(stmt)) {
+                deadCode.add(stmt);
+            }
+        }
+
+        // ---- 3. 死赋值检测：仅针对可达语句 ----
+        for (Stmt stmt : reachable) {
+            if (stmt instanceof AssignStmt<?, ?>) {
+                AssignStmt<?, ?> assign = (AssignStmt<?, ?>) stmt;
+                // 左值必须是变量
+                if (assign.getLValue() instanceof Var) {
+                    Var var = (Var) assign.getLValue();
+                    // 该变量在 out 中不活跃，且右值无副作用 => 死赋值
+                    // （x = a / b 这类可能抛异常的会被 hasNoSideEffect 拦下，予以保留）
+                    if (!liveVars.getOutFact(stmt).contains(var)
+                            && hasNoSideEffect(assign.getRValue())) {
+                        deadCode.add(stmt);
+                    }
+                }
+            }
+        }
+
+
+
         return deadCode;
     }
 
