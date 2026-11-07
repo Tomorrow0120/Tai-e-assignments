@@ -60,6 +60,8 @@ import static pascal.taie.util.collection.CollectionUtils.getOne;
  * input/output analysis results from/to file, and compare analysis results
  * with input results. This analysis should be placed after the other analyses.
  */
+
+// 处理分析结果的特殊分析类
 public class ResultProcessor extends ProgramAnalysis {
 
     public static final String ID = "process-result";
