@@ -112,6 +112,12 @@ class Solver {
      */
     private void addReachable(CSMethod csMethod) {
         // TODO - finish me
+
+        if (callGraph.addReachableMethod(csMethod)) {
+            StmtProcessor processor = new StmtProcessor(csMethod);
+            csMethod.getMethod().getIR().forEach(stmt -> stmt.accept(processor));
+        }
+
     }
 
     /**
@@ -130,6 +136,28 @@ class Solver {
 
         // TODO - if you choose to implement addReachable()
         //  via visitor pattern, then finish me
+
+        @Override
+        public Void visit(New stmt) {
+            CSVar target = csManager.getCSVar(context, stmt.getLValue());
+
+            Obj obj = heapModel.getObj(stmt);
+            Context heapContext = contextSelector.selectHeapContext(csMethod, obj);
+            CSObj csObj = csManager.getCSObj(heapContext, obj);
+
+            workList.addEntry(target, PointsToSetFactory.make(csObj));
+            return null;
+        }
+
+        @Override
+        public Void visit(Copy stmt) {
+            CSVar source = csManager.getCSVar(context, stmt.getRValue());
+            CSVar target = csManager.getCSVar(context, stmt.getLValue());
+            addPFGEdge(source, target);
+            return null;
+        }
+
+
     }
 
     /**
@@ -137,6 +165,14 @@ class Solver {
      */
     private void addPFGEdge(Pointer source, Pointer target) {
         // TODO - finish me
+
+        if (pointerFlowGraph.addEdge(source, target)) {
+            PointsToSet objects = source.getPointsToSet();
+            if (objects != null && !objects.isEmpty()) {
+                workList.addEntry(target, objects);
+            }
+        }
+
     }
 
     /**
@@ -144,6 +180,17 @@ class Solver {
      */
     private void analyze() {
         // TODO - finish me
+
+        while (!workList.isEmpty()) {
+            WorkList.Entry entry = workList.pollEntry();
+            PointsToSet delta = propagate(entry.pointer(), entry.pointsToSet());
+            if (entry.pointer() instanceof CSVar recv) {
+                for (CSObj recvObj : delta) {
+                    processCall(recv, recvObj);
+                }
+            }
+        }
+
     }
 
     /**
@@ -152,7 +199,26 @@ class Solver {
      */
     private PointsToSet propagate(Pointer pointer, PointsToSet pointsToSet) {
         // TODO - finish me
-        return null;
+        PointsToSet current = pointer.getPointsToSet();
+        if (current == null) {
+            current = PointsToSetFactory.make();
+            pointer.setPointsToSet(current);
+        }
+
+        PointsToSet delta = PointsToSetFactory.make();
+        for (CSObj obj : pointsToSet) {
+            if (current.addObject(obj)) {
+                delta.addObject(obj);
+            }
+        }
+
+        if (!delta.isEmpty()) {
+            for (Pointer successor : pointerFlowGraph.getSuccsOf(pointer)) {
+                workList.addEntry(successor, delta);
+            }
+        }
+
+        return delta;
     }
 
     /**
