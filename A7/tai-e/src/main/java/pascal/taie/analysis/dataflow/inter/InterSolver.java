@@ -58,11 +58,70 @@ class InterSolver<Method, Node, Fact> {
         return result;
     }
 
+    Fact getInFact(Node node) {
+        return result.getInFact(node);
+    }
+
+    void addToWorkList(Node node) {
+        workList.add(node);
+    }
+
     private void initialize() {
         // TODO - finish me
+
+        workList = new SetQueue<>();
+
+        for (Node node : icfg) {
+            result.setInFact(node, analysis.newInitialFact());
+            result.setOutFact(node, analysis.newInitialFact());
+
+            workList.add(node);
+        }
+
+        icfg.entryMethods().forEach(method -> {
+            Node entry = icfg.getEntryOf(method);
+            result.setInFact(entry, analysis.newBoundaryFact(entry));
+        });
+
     }
 
     private void doSolve() {
         // TODO - finish me
+
+        Set<Node> entryNodes = icfg.entryMethods()
+                .map(icfg::getEntryOf)
+                .collect(Collectors.toSet());
+
+        while (!workList.isEmpty()) {
+            Node node = workList.remove();
+
+            // 重新计算 IN，并保留分析入口的边界条件
+            Fact in = entryNodes.contains(node)
+                    ? analysis.newBoundaryFact(node)
+                    : analysis.newInitialFact();
+
+            // 每个前驱的 OUT，先经过对应入边的转移
+            for (var edge : icfg.getInEdgesOf(node)) {
+                Fact predecessorOut =
+                        result.getOutFact(edge.getSource());
+
+                Fact edgeFact =
+                        analysis.transferEdge(edge, predecessorOut);
+
+                analysis.meetInto(edgeFact, in);
+            }
+
+            result.setInFact(node, in);
+
+            // 根据当前语句，将 IN 转换成 OUT
+            Fact out = result.getOutFact(node);
+
+            if (analysis.transferNode(node, in, out)) {
+                for (Node successor : icfg.getSuccsOf(node)) {
+                    workList.add(successor);
+                }
+            }
+        }
+
     }
 }
